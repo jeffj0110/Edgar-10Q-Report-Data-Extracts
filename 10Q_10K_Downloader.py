@@ -1,4 +1,3 @@
-# Example script for Edgar data extraction
 # This is meant to find the XML file names for 10Q or 10K filings
 # import our libraries
 import re
@@ -177,6 +176,7 @@ def get_10k_10Q(Input_File_Name, Imp_Directory) :
     # If no XML file name available for a filed 10k/q, then skip that one
 
     #Read list of tickers / CIK for companies to be processed
+    global CWD
     base_directory = pathlib.Path.cwd()
     fname = base_directory.joinpath(Input_File_Name).resolve()
     Ticker_CIK = pd.read_csv(fname)
@@ -207,6 +207,7 @@ def get_10k_10Q(Input_File_Name, Imp_Directory) :
                 filenamestring = new_date_string + '_' + tck + '_' + str(cik) + '_' + Rep_Type + '.xml'
                 if Report_Date.year > 2010 :
                     Input_URL = Filing_URL_List.get(rep_date)[2]
+                    os.chdir(CWD)
                     if Report_Exists('OutputXML\\' + tck + '\\' + filenamestring) == False:
                         XML_Download_URL = Extract_XML_File_URL(Input_URL)
                         if XML_Download_URL != 'none' :
