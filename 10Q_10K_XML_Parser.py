@@ -1,6 +1,6 @@
-# Example script for Edgar data extraction
-# June 2021 : Jeff Jones
-# import our libraries
+# SEC Edgar SBRL XML Data Parser
+# July 2021 : Jeff Jones
+# 
 import sys, getopt, os
 import glob
 import re
@@ -63,6 +63,66 @@ def ExclusionFound(Search_String):
             return True
     return False
 
+#This function will convert a string formatted with any of the following
+#Patterns to a float variable of years (whole years plus fractional)
+#The following patterns are supported
+# P##Y##M##D  : Converts to Years+Month/12+Days/360
+# P##Y : Converts to Years
+# P##M : Converts to zero years plus Months/12
+# P##D: Converts to zero years, zero months plus Days/360
+# P##Y##M     ...
+# P##M##D     ...
+# P##Y##D     ...
+def Convert_Period_To_Years(Input_String) :
+    year_total = float(0.0)
+# Verify valid incoming format
+    if len(Input_String) == 0 :
+        return 0.0
+    if Input_String.startswith('P') :
+        Years_Numbers = ''
+        Months_Numbers = ''
+        Days_Numbers = ''
+        if 'Y' in Input_String :
+            Y_Position = Input_String.find('Y') - 1
+            for i in range(Y_Position, 0, -1) :
+                if Input_String[i].isdigit() :
+                    Years_Numbers = Input_String[i] + Years_Numbers
+                else :
+                    break    # Need to break out of for loop if we hit a non-numeric
+        if 'M' in Input_String :
+            M_Position = Input_String.find('M') -1
+            for i in range(M_Position, 0, -1):
+                if Input_String[i].isdigit():
+                    Months_Numbers = Input_String[i] + Months_Numbers
+                else:
+                    break  # Need to break out of for loop if we hit a non-numeric
+        if 'D' in Input_String :
+            D_Position = Input_String.find('D') - 1
+            for i in range(D_Position, 0, -1):
+                if Input_String[i].isdigit():
+                    Days_Numbers = Input_String[i] + Days_Numbers
+                else:
+                    break  # Need to break out of for loop if we hit a non-numeric
+    else :
+        return 0.0
+
+    if Years_Numbers == '' :
+        Year_Float = 0.0
+    else :
+        Year_Float = float(Years_Numbers)
+
+    if (Months_Numbers == '') :
+        Month_Float = 0.0
+    else :
+        Month_Float = float(Months_Numbers)
+
+    if Days_Numbers == '' :
+        Days_Float = 0.0
+    else :
+        Days_Float = float(Days_Numbers)
+
+    year_total = Year_Float + (Month_Float/12) + (Days_Float/360)
+    return year_total
 
 # Find matching contextRef for a field
 def Find_contextRef(id):
@@ -82,10 +142,7 @@ def Process_Contexts(tree) :
 #        print("Context Element ID", cnx_item.attrib.get('id', 'null'))
 #        context_children = cnx_item.getchildren()
         for cnx_child in cnx_item.iter():
-            #extract as of dates from context
-#            print(cnx_child.tag)
             if cnx_child.tag.endswith('}period') :
-#                period_objects = cnx_child.getchildren()
                 for date_child in cnx_child.iter() :
 #                    print(cnx_child.tag, date_child.tag)
                     if date_child.tag.endswith('}endDate') :
@@ -97,11 +154,16 @@ def Process_Contexts(tree) :
 #            print("Iterating through levels of context", context_child.tag)
             for att in context_child.attrib:
                 if att:
-#                    print("Attribute", att)
-                    context_dictionary[cnx_item.attrib['id']][att] = context_child.attrib[att]
+                    if att != 'dimension' :
+                        context_dictionary[cnx_item.attrib['id']][att] = context_child.attrib[att]
                     if not context_child.text is None:
                         if context_child.text.strip() != '':
                             if att == 'dimension':
+                                if 'dimension' in context_dictionary[cnx_item.attrib['id']].keys():
+                                    context_dictionary[cnx_item.attrib['id']]['dimension'] = context_child.attrib[att] + " / " + context_dictionary[cnx_item.attrib['id']]['dimension']
+
+                                else :
+                                    context_dictionary[cnx_item.attrib['id']]['dimension'] = context_child.attrib[att]
                                 if 'text' in context_dictionary[cnx_item.attrib['id']].keys():
                                     if context_dictionary[cnx_item.attrib['id']]['text'] != '':
                                         context_dictionary[cnx_item.attrib['id']]['text'] = context_child.text.strip() + " / " + \
@@ -165,7 +227,7 @@ def Write_CSV(file_name, ticker) :
         writer = csv.writer(sec_file, quoting=csv.QUOTE_ALL)
 
         # write the header.
-        writer.writerow(['Ticker', 'Report_Date', 'Field_Date', 'Table Row', 'Column', 'Value', 'Value_Rounding'])
+        writer.writerow(['Ticker', 'Report_Date', 'Field_Date', 'Dimension', 'Member', 'FactDesc', 'Fact', 'Value_Rounding'])
         # Need DocumentPeriodEndDate field for the report date in each record
         Report_Date = ''
         for storage_1 in storage_gaap:
@@ -187,6 +249,7 @@ def Write_CSV(file_name, ticker) :
             # Cont_Ref = Find_contextRef(storage_gaap[storage_1]['contextRef'])
             # print(Cont_Ref)
             # RowStr2 = dict(Cont_Ref['text'])
+            dimension_string = ''
             if 'contextRef' in storage_gaap[storage_1].keys() :
                 id = storage_gaap[storage_1]['contextRef']
                 if id != 'null' :
@@ -200,7 +263,10 @@ def Write_CSV(file_name, ticker) :
                             date_string = Report_Date
                     else:
                         date_string = Report_Date
-
+                    if 'dimension' in context_dictionary[id].keys() :
+                        dimension_string = context_dictionary[id]['dimension']
+                    else:
+                        dimension_string = ''
                     CombinedText = context_dictionary[id]['text']
                     Row_String = CombinedText
                 else:
@@ -218,13 +284,24 @@ def Write_CSV(file_name, ticker) :
                 original_xml_number = float(storage_gaap[storage_1]['StringValue'])
                 converted_number = float(storage_gaap[storage_1]['StringValue'])
                 output_converted_number = str(converted_number)
+            elif storage_gaap[storage_1]['StringValue'].startswith('P') :
+                #This might be a period type field, where we need to convert to a years number
+                string_variable = storage_gaap[storage_1]['StringValue']
+                if len(string_variable) > 1 :
+                    if string_variable[1].isdigit() and ('Y' in string_variable or 'M' in string_variable or 'D' in string_variable) :
+                        converted_number = Convert_Period_To_Years(string_variable)
+                        output_converted_number= str(converted_number)
+                    else :
+                        output_converted_number = storage_gaap[storage_1]['StringValue']
+                else :
+                    output_converted_number = storage_gaap[storage_1]['StringValue']
             else:
                 output_converted_number = storage_gaap[storage_1]['StringValue']
 
             if 'font-' in output_converted_number or 'FONT-' in output_converted_number:
                 output_converted_number = 'Suppressed'
 
-            output_line = [ticker, Report_Date, date_string, Row_String, ColumnName, output_converted_number, dec_value]
+            output_line = [ticker, Report_Date, date_string, dimension_string, Row_String, ColumnName, output_converted_number, dec_value]
             writer.writerow(output_line)
 
         sec_file.close()
@@ -285,7 +362,6 @@ def Concatenate_CSV_Files(InputFileName, CurrentDirectory) :
     fname = base_directory.joinpath(InputFileName).resolve()
     Ticker_CIK = pd.read_csv(fname)
     num_tickers = len(Ticker_CIK)
-    file_counter = 0
     for row in range(num_tickers):
         os.chdir(CurrentDirectory)
         os.chdir("OutputXML")
@@ -296,7 +372,7 @@ def Concatenate_CSV_Files(InputFileName, CurrentDirectory) :
         extension = 'csv'
         all_filenames = [i for i in glob.glob('*.{}'.format(extension))]
         # combine all files in the list
-        combined_csv = pd.concat([pd.read_csv(f) for f in all_filenames])
+        combined_csv = pd.concat([pd.read_csv(f, low_memory=False) for f in all_filenames])
         # export to csv
         Combined_File_Name = tck + '_Combined.csv'
         combined_csv.to_csv(Combined_File_Name, index=False, encoding='utf-8-sig')
