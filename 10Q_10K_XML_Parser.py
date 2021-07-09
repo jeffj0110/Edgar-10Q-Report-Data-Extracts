@@ -1,6 +1,10 @@
-# SEC Edgar SBRL XML Data Parser
+# SEC Edgar XBRL XML Data Parser
 # July 2021 : Jeff Jones
-# 
+#
+# The script will pull in files from a base directory which are organized by Ticker
+#  Base Dir -> Symbol > *.xml files
+# The XBRL Instance XML and XBRL Presentation XML files are used.
+#
 import sys, getopt, os
 import glob
 import re
@@ -62,6 +66,176 @@ def ExclusionFound(Search_String):
 #            print("excluding ", Search_String)
             return True
     return False
+
+# Read in Presentation XML file for a report and parse the results
+# into a Pandas dataframe by organizing the relationships between the
+# fields and the various locations it is used in the report.
+# The Presentation XML file needs to follow the same naming conventions as the Instance
+# file name except that it has a _pre on the end of the file pre-extension
+def Pres_XML_Parse(file_name) :
+
+    # Initalize storage units, one will be the master list, one will store all the values, and one will store all GAAP info.
+    storage_list = []
+    # Labels come in two forms, those I want and those I don't want.
+    avoids = ['linkbase']
+    # parse = ['roleRef','label','labelLink','labelArc','loc','definitionLink','definitionArc','calculationArc', 'presentationLink', 'order']
+    parse = ['roleRef', 'loc', 'presentationLink', 'presentationArc']
+    # parse = ['roleRef','presentationArc']
+    ArcList_DF = pd.DataFrame()
+    # part of the process is matching up keys, to do that we will store some keys as we parse them.
+    list_count = 0
+    # loop through each file.
+
+    Preso_file_name = file_name.replace(".csv", "_pre.xml")
+    working_directory = pathlib.Path.cwd()
+    file_pre = working_directory.joinpath(Preso_file_name).resolve()
+    if os.path.exists(file_pre) == False :
+        print(f"Presentation XML File Not Found {Preso_file_name}")
+        return ArcList_DF
+    tree = ET.parse(file_pre)
+    # This will find all the 'presentationLink' objects in the file
+    elements = tree.findall('{http://www.xbrl.org/2003/linkbase}presentationLink')
+    for element in elements:
+        # if the element has children we need to loop through those.
+        elem_keys = element.keys()
+        for element_key in elem_keys:
+            if '}' in element_key:
+                key_name = element_key.split('}')[1]
+                if key_name == 'role':
+                    Presentation_Section = element.attrib[element_key].rsplit('/', 1)[1]
+
+        for child_element in element.iter():
+            # split the label to remove the namespace component, this will return a list.
+            element_split_label = child_element.tag.split('}')
+            # The first element is the namespace, and the second element is a label.
+            namespace = element_split_label[0]
+            label = element_split_label[1]
+            #            print(namespace, "-", label)
+            # if it's a PresentationArc, we want to capture the
+            # parent and field name to understand where the data point
+            # is being presented in the report.
+            if label == 'presentationArc':
+                # define the item type label
+                element_type_label = label
+                # initalize a smaller dictionary that will house all the content from that element.
+                dict_storage = {}
+                #                dict_storage['item_type'] = element_type_label
+                # grab the attribute keys
+                cal_keys = child_element.keys()
+                # for each key.
+                for key in cal_keys:
+                    if '}' in key:
+                        # add the new key to the dictionary and grab the old value.
+                        new_key = key.split('}')[1]
+                        if new_key == 'from':
+                            if "_" in child_element.attrib[key] :
+                                subsection = child_element.attrib[key].rsplit('_', 2)[1]
+                            else :
+                                subsection = child_element.attrib[key]
+                            dict_storage['Subsection'] = subsection
+                        if new_key == 'to':
+                            if "_" in child_element.attrib[key]:
+                                dei_field_name = child_element.attrib[key].rsplit('_', 2)[1]
+                            else :
+                                dei_field_name = child_element.attrib[key]
+                            dict_storage[new_key] = dei_field_name
+                dict_storage['Pres_Sect'] = Presentation_Section
+                storage_list.append(['presentationArc', dict_storage])
+                list_count += 1
+# Search for the field in the accumulated directory of values from the Presentation XML file
+    Arc_List = []
+    for dict_cont in storage_list:
+        field_value = ''
+        Sect_value = ''
+        SubSection_Value = ''
+        list_of_items = dict_cont[1].items()
+        for item in list_of_items:
+            if item[0] == 'to':
+                field_value = item[1]
+            if item[0] == 'Pres_Sect':
+                Sect_value = item[1]
+            if item[0] == 'Subsection':
+                SubSection_Value = item[1]
+
+        new_row = ['presentation',
+                       Sect_value,
+                       SubSection_Value,
+                       field_value]
+        Arc_List.append(new_row)
+
+    num_arcs = len(Arc_List)
+#    print("Size of arcs ", num_arcs)
+    if num_arcs < 1 :
+        print(f"No Presentation Link Entries for  {Preso_file_name}")
+        return ArcList_DF
+    else:
+        ArcList_DF = pd.DataFrame(Arc_List, columns=['FILE', 'Section_Value', 'Sub-Section_VALUE', 'Field_Name'])
+        return ArcList_DF
+
+def Find_Linked_Entries(ArcList_DF, input_Row_String, input_dimension_string, Section, Sub_Section, Field_Name) :
+    # If strings start with us-gaap:, we need to truncate us-gaap:
+#    if ':' in input_Row_String :
+#        clean_Row_String = input_Row_String.rsplit(':',1)[1]
+#    else:
+    clean_Row_String = input_Row_String
+#    if ':' in input_dimension_string :
+#        clean_dimension_string = input_dimension_string.rsplit(':',1)[1]
+#    else :
+    clean_dimension_string = input_dimension_string
+
+    if (Section in clean_Row_String ) or (Sub_Section in clean_Row_String) :
+        target_Section_Value = Section
+        target_Sub_Section_Value = Sub_Section
+        return target_Section_Value, target_Sub_Section_Value, True
+    if (Section in clean_dimension_string) or (Sub_Section in clean_dimension_string) :
+        target_Section_Value = Section
+        target_Sub_Section_Value = Sub_Section
+        return target_Section_Value, target_Sub_Section_Value, True
+    # if length of this search > 0, then we look to see if
+    # the clean dimension or  clean row string are in the resulting row values
+    # if we find them, we stop and return.  If we don't find them, we keep going until
+    # the search returns no results
+    Search_df = ArcList_DF.loc[ArcList_DF['Field_Name'] == Sub_Section]
+    search_results = len(Search_df)
+    while search_results > 0 :
+        for i in range(search_results) :
+            working_Section_Value = Search_df.iloc[i, 1]
+            working_subSection_Value = Search_df.iloc[i, 2]
+            if (working_Section_Value in clean_Row_String) or (working_subSection_Value in clean_Row_String) :
+                target_Section_Value = working_Section_Value
+                target_Sub_Section_Value = working_subSection_Value
+                return target_Section_Value, target_Sub_Section_Value, True
+            if (working_Section_Value in clean_dimension_string) or (working_subSection_Value in clean_dimension_string) :
+                target_Section_Value = working_Section_Value
+                target_Sub_Section_Value = working_subSection_Value
+                return target_Section_Value, target_Sub_Section_Value, True
+        Search_df = ArcList_DF.loc[ArcList_DF['Field_Name'] == working_Section_Value]
+        search_results = len(Search_df)
+    return '', '', False
+
+def Search_ArcList_DF(ArcList_DF, input_ColumnName, input_Row_String, input_dimension_string) :
+    return_Section_Value = ''
+    return_Sub_Section_Value = ''
+    filtered_df = ArcList_DF.loc[ArcList_DF['Field_Name'] == input_ColumnName]
+    len_filtereddf = len(filtered_df)
+    if len_filtereddf == 0 :
+        return return_Section_Value, return_Sub_Section_Value
+#    print("Size of filtered df  ", len_filtereddf)
+    if len_filtereddf == 1 :
+        return_Section_Value = filtered_df.iloc[0, 1]
+        return_Sub_Section_Value = filtered_df.iloc[0, 2]
+    else :
+        # We search for input_dimension_string
+        if ((len(input_Row_String) == 0) and (len(input_dimension_string) == 0)) or (input_Row_String.isspace() and input_dimension_string.isspace()) :
+            return_Section_Value = filtered_df.iloc[0, 1]
+            return_Sub_Section_Value = filtered_df.iloc[0, 2]
+        else:
+            for i in range(len_filtereddf) :
+                return_Section_Value, return_Sub_Section_Value, Success_Found = Find_Linked_Entries(ArcList_DF, input_Row_String, input_dimension_string, filtered_df.iloc[i, 1], filtered_df.iloc[0, 2], input_ColumnName)
+                if Success_Found :
+                    return return_Section_Value, return_Sub_Section_Value
+
+    return return_Section_Value, return_Sub_Section_Value
 
 #This function will convert a string formatted with any of the following
 #Patterns to a float variable of years (whole years plus fractional)
@@ -203,18 +377,32 @@ def Parse_XML(xml_file):
                     storage_gaap[element.attrib['id']] = {}
                     storage_gaap[element.attrib['id']]['tag'] = element.tag
                     storage_gaap[element.attrib['id']]['decimals'] = element.attrib.get('decimals', 'null')
-#                    if element.attrib.get('contextRef', 'null') != 'null':
                     storage_gaap[element.attrib['id']]['contextRef'] = element.attrib.get('contextRef', 'null')
-#                    else:
-#                        pprint.pprint(element)
                     storage_gaap[element.attrib['id']]['unitRef'] = element.attrib.get('unitRef', 'null')
                     storage_gaap[element.attrib['id']]['decimals'] = element.attrib.get('decimals', 'null')
                     if not element.text is None:
                         storage_gaap[element.attrib['id']]['StringValue'] = element.text
                     else:
                         storage_gaap[element.attrib['id']]['StringValue'] = ''
-#                else:
-#                    print("Ignoring this tag", element.tag)
+# There are a submissions where there is no ID attribute for a given fact data point.  This is
+# a result of it not being a  XBRL submission
+# These have to be ignored because of the lack of structure with these submissions.
+#                else :
+#                    #Need to construct a unique id where companies did not insert an ID
+#                    id_string = element.tag + element.attrib.get('contextRef', 'null')
+#                    storage_gaap[id_string] = {}
+##                    storage_gaap[id_string]['tag'] = element.tag
+#                    storage_gaap[id_string]['decimals'] = element.attrib.get('decimals', 'null')
+#                    storage_gaap[id_string]['contextRef'] = element.attrib.get('contextRef', 'null')
+#                    storage_gaap[id_string]['unitRef'] = element.attrib.get('unitRef', 'null')
+#                    storage_gaap[id_string]['decimals'] = element.attrib.get('decimals', 'null')
+#                    if not element.text is None:
+#                        storage_gaap[id_string]['StringValue'] = element.text
+#                    else:
+#                        storage_gaap[id_string]['StringValue'] = ''
+#                    print("Need to review")
+#        else:
+#            print("Exclusion")
 
     print(f"Number of Context Entries : {len(context_dictionary)}")
     print(f"Number of Table Values : {len(storage_gaap)}")
@@ -227,8 +415,11 @@ def Write_CSV(file_name, ticker) :
         writer = csv.writer(sec_file, quoting=csv.QUOTE_ALL)
 
         # write the header.
-        writer.writerow(['Ticker', 'Report_Date', 'Field_Date', 'Dimension', 'Member', 'FactDesc', 'Fact', 'Value_Rounding'])
+        writer.writerow(['Ticker', 'Report_Date', 'Field_Date', 'Section', 'Sub_Section', 'Dimension', 'Member', 'FactDesc', 'Fact', 'Value_Rounding'])
         # Need DocumentPeriodEndDate field for the report date in each record
+        # Open Presentation XML and create Presentation XML Dataframe objective
+        Arc_DF = Pres_XML_Parse(file_name)
+        num_arcs = len(Arc_DF)
         Report_Date = ''
         for storage_1 in storage_gaap:
             if 'DocumentPeriodEndDate' in storage_gaap[storage_1]['tag']:
@@ -300,8 +491,12 @@ def Write_CSV(file_name, ticker) :
 
             if 'font-' in output_converted_number or 'FONT-' in output_converted_number:
                 output_converted_number = 'Suppressed'
-
-            output_line = [ticker, Report_Date, date_string, dimension_string, Row_String, ColumnName, output_converted_number, dec_value]
+            if num_arcs > 1 :
+                Section_Value, Sub_Section_Value = Search_ArcList_DF(Arc_DF, ColumnName, Row_String, dimension_string)
+            else :
+                Section_Value = ''
+                Sub_Section_Value = ''
+            output_line = [ticker, Report_Date, date_string, Section_Value, Sub_Section_Value, dimension_string, Row_String, ColumnName, output_converted_number, dec_value]
             writer.writerow(output_line)
 
         sec_file.close()
@@ -319,7 +514,7 @@ def SecParse_MultipleFiles(InputFileName) :
     #Read list of tickers / CIK for companies to be processed
 
     base_directory = pathlib.Path.cwd()
-    # Read in input Excel file with all the filings (downloading Excel files has to be done manually right now)
+    # Read in input CSV file with all the tickers
     for row in range(num_tickers):
         os.chdir(CWD)
         os.chdir("OutputXML")
@@ -331,7 +526,10 @@ def SecParse_MultipleFiles(InputFileName) :
         # Get list of files
         base_directory = pathlib.Path.cwd()
         print("Working in Directory : ", base_directory)
-        file_list = glob.glob('*.xml')
+        file_list = glob.glob('*.xml', )
+        for i in range(len(file_list) - 1, -1, -1) :
+            if '_pre.xml' in file_list[i].lower() :
+                del file_list[i]
         for file_name in file_list :
             print(file_name)
             file_htm = base_directory.joinpath(file_name).resolve()
@@ -371,6 +569,10 @@ def Concatenate_CSV_Files(InputFileName, CurrentDirectory) :
         os.chdir(tck)
         extension = 'csv'
         all_filenames = [i for i in glob.glob('*.{}'.format(extension))]
+        # Do not concatenate to the existing Combined*.csv file, just overwrite it.
+        for i in range(len(all_filenames) - 1, -1, -1) :
+            if '_combined.csv' in all_filenames[i].lower() :
+                del all_filenames[i]
         # combine all files in the list
         combined_csv = pd.concat([pd.read_csv(f, low_memory=False) for f in all_filenames])
         # export to csv
