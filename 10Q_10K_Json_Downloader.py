@@ -1,20 +1,16 @@
-# Reads a list of json files which are downloaded from the SEC website.
-# and  parses the lines with 10k/10Q filings associated with them.
-# The Accession and values are then used to submit a request to download the associated files for
-# that filing.
+# This script downloads 10Q and 10k submissions to the SEC Edgar system.
+# A list of tickers and CIK numbers are read from an input file (currently hard coded to be Ticker_CIK_List.csv
+# Each entry is then submitted to the SEC site for the recent submissions.
 #
 # import our libraries
-#import ref
 import requests
 import time
-import xlrd
 import sys, getopt, os
 import os.path
 from os import path
 import pathlib
 import pandas as pd
 from datetime import datetime
-import unicodedata
 from bs4 import BeautifulSoup
 import json
 from requests.adapters import HTTPAdapter
@@ -30,6 +26,11 @@ def restore_windows_1252_characters(restore_string):
         where possible.
     """
 
+#If Windows‑1252 has a printable character at that byte value, it returns it.
+#If not, it returns an empty string (removes the character).
+#Because Windows‑1252 famously used the byte range 0x80–0x99 for punctuation and symbols, not control characters.
+#Some text gets incorrectly decoded as Unicode control characters instead of these symbols.
+#This function repairs that by mapping them back.
     def to_windows_1252(match):
         try:
             return bytes([ord(match.group(0))]).decode('windows-1252')
@@ -236,8 +237,8 @@ def Retrieve_Store_XML_Files(tck, cik, Report_Type, Report_Date, XML_Download_UR
     # Get rid of any \ or / characters in the Report_Type
     Rep_Type = Report_Type.replace('/', '')
     filenamestring = new_date_string + '_' + tck + '_' + str(cik) + '_' + Rep_Type + '.xml'
-    #if file exists, don't process it again.
-    if Report_Exists(filenamestring) == False :
+    #if file exists, don't process it again.  Just want submissions from 2025 to save space.
+    if (Report_Exists(filenamestring)) == False and (date_time_obj.year == 2025) :
         # This is to avoid overruning the SEC Website.  Too many requests and they will disable your IP for a period of time.
         print("Sleep 1")
         time.sleep(1)
@@ -259,7 +260,7 @@ def Retrieve_Store_XML_Files(tck, cik, Report_Type, Report_Date, XML_Download_UR
     # Retrieve and write the Presentation xml schema file
     filenamestring = new_date_string + '_' + tck + '_' + str(cik) + '_' + Rep_Type + '_Pre' + '.xml'
     # if file exists, don't process it again.
-    if Report_Exists(filenamestring) == False:
+    if (Report_Exists(filenamestring) == False) and (date_time_obj.year == 2025) :
         # This is to avoid overrunning the SEC Website.  Too many requests and they will disable your IP for a period of time.
         print("Sleep 1")
         time.sleep(1)

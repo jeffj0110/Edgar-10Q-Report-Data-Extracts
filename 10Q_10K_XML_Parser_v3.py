@@ -7,15 +7,8 @@
 #
 import sys, getopt, os
 import glob
-import re
 from datetime import datetime
-from typing import Generator
-from xml.etree.ElementTree import Element
 import pandas as pd
-import requests
-import unicodedata
-import lxml
-from bs4 import BeautifulSoup
 import csv
 import pprint
 import pathlib
@@ -81,8 +74,6 @@ def reverseFind(startIndex, inputString, inputChar1, inputChar2) :
             IndexCnter = i
             break
     return IndexCnter
-
-
 
 global ID_Counter
 def CreateID() :
@@ -684,9 +675,7 @@ def Concatenate_CSV_Files(InputFileName, CurrentDirectory) :
         print("Combined CSV Files For ", tck)
     return
 
-# Check to see if this file is being executed as the "Main" python
-# script instead of being used as a module by some other python script
-# This allows us to use the module which ever way we want.
+
 def main(argv):
    global ID_Counter
    inputfile = 'Ticker_CIK_List.csv'
@@ -713,5 +702,8 @@ def main(argv):
        print("No XML Files Retrieved For ",inputfile)
        return False
 
+# Check to see if this file is being executed as the "Main" python
+# script instead of being used as a module by some other python script
+# This allows us to use the module which ever way we want.
 if __name__ == "__main__":
    main(sys.argv[1:])

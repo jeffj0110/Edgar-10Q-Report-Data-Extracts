@@ -5,4 +5,4 @@ There are two python3 scripts included.
     
     10Q_10K_XML_Parser_v3.py - This is the latest XBRL parser which processes the Instance and Presentation XBRL XML files for a 10Q or 10K report.  It will generate a CSV file containing all the data points which are defined in the report.
     
-    
+    Both scripts recently upgraded to Python v3.12
